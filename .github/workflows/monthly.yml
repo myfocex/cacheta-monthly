@@ -33,5 +33,4 @@ jobs:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           CACHETA_USERNAME: ${{ secrets.LOGIN_USER }}
           CACHETA_PASSWORD: ${{ secrets.LOGIN_PASS }}
-          TEST_MONTH: 202601
         run: python main.py
