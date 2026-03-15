@@ -227,7 +227,7 @@ def download_excel_for_month(month: str) -> Path:
                     continue
 
             if not month_clicked:
-                print(f"[INFO] 网站还没有月份数据：{month_short}/{month_full}")
+                print(f"[INFO] 网站还没有月份数据：{month}")
                 return None
 
             page.wait_for_load_state("networkidle", timeout=30000)
