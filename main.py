@@ -58,7 +58,7 @@ def sheet_exists(month: str) -> bool:
 
 
 def main():
-    month = get_last_month()
+    month = os.environ.get("TEST_MONTH") or get_last_month()
 
     try:
         send_telegram(f"🚀 开始检查 {month} 流水")
