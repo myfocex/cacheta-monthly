@@ -31,4 +31,6 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          CACHETA_USERNAME: ${{ secrets.LOGIN_USER }}
+          CACHETA_PASSWORD: ${{ secrets.LOGIN_PASS }}
         run: python main.py
