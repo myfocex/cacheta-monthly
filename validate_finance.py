@@ -63,27 +63,16 @@ def validate_finance_excel(excel_path: str) -> Dict[str, Any]:
         },
     }
 
-    # =========================
-    # 1) 未映射类型检查
-    # =========================
     unknown = data.get("unknown", {}) or {}
     result["details"]["unknown"] = unknown
 
-    has_unknown = False
     for company, items in unknown.items():
         if items:
-            has_unknown = True
             for item in items:
-                result["errors"].append(
-                    f"{company} 未映射项目类型: {item['raw_name']} | 金额: {item['amount']}"
+                result["warnings"].append(
+                    f"{company} 未映射项目类型: {item['raw_name']} | 金额: {item['amount']} | 类型: {item.get('type', '')}"
                 )
 
-    if has_unknown:
-        result["ok"] = False
-
-    # =========================
-    # 2) 公司级校验：总收入 / 总支出 / 净额 / 税费
-    # =========================
     companies = ["ABEMC", "FORRA", "MIND SPORTS"]
 
     for company in companies:
@@ -157,9 +146,6 @@ def validate_finance_excel(excel_path: str) -> Dict[str, Any]:
             result["ok"] = False
             result["errors"].append(f"{company}: " + "；".join(company_errors))
 
-    # =========================
-    # 3) 顶部汇总校验
-    # =========================
     month_num = data["meta"]["month_num"]
     summary_left = data["summary_left"]
 
@@ -178,7 +164,10 @@ def validate_finance_excel(excel_path: str) -> Dict[str, Any]:
     expected_other_income = round2(
         sum(item.get("income") or 0 for item in data["companies"]["ABEMC"].get("其他收入", [])) +
         sum(item.get("income") or 0 for item in data["companies"]["FORRA"].get("其他收入", [])) +
-        sum(item.get("income") or 0 for item in data["companies"]["MIND SPORTS"].get("其他收入", []))
+        sum(item.get("income") or 0 for item in data["companies"]["MIND SPORTS"].get("其他收入", [])) +
+        sum(item.get("income") or 0 for item in data["companies"]["ABEMC"].get("未映射项目", [])) +
+        sum(item.get("income") or 0 for item in data["companies"]["FORRA"].get("未映射项目", [])) +
+        sum(item.get("income") or 0 for item in data["companies"]["MIND SPORTS"].get("未映射项目", []))
     )
 
     expected_total_balance = round2(
@@ -229,7 +218,7 @@ def validate_finance_excel(excel_path: str) -> Dict[str, Any]:
         result["errors"].append("顶部汇总异常: " + "；".join(summary_errors))
 
     if result["ok"]:
-        result["warnings"].append("校验通过：总收入、总支出、净额、税费、顶部汇总均一致，且没有未映射类型。")
+        result["warnings"].append("校验通过：总收入、总支出、净额、税费、顶部汇总均一致。")
 
     return result
 

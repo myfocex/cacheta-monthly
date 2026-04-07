@@ -4,10 +4,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 
-# =========================
-# 基础工具
-# =========================
-
 MONTH_NAME_TO_NUM = {
     "january": 1,
     "february": 2,
@@ -65,22 +61,17 @@ def fmt_label(template: str, month_num: int) -> str:
     return template.format(m=month_num)
 
 
-# =========================
-# 月份 / 标题解析
-# =========================
-
 def parse_period_from_cover(excel_path: str) -> Tuple[int, int]:
-    try:
-        df = read_raw_sheet(excel_path, "📋 Cover")
-    except Exception:
-        return 2026, 1
+    df = read_raw_sheet(excel_path, "📋 Cover")
 
-    year = 2026
-    month_num = 1
+    all_text = []
 
     for i in range(len(df)):
         row_texts = [normalize_text(v) for v in df.iloc[i].tolist()]
         joined = " ".join([x for x in row_texts if x])
+
+        if joined:
+            all_text.append(joined)
 
         m = re.search(
             r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})",
@@ -93,16 +84,17 @@ def parse_period_from_cover(excel_path: str) -> Tuple[int, int]:
             month_num = MONTH_NAME_TO_NUM[month_name]
             return year, month_num
 
-    return year, month_num
+    cover_text = " | ".join(all_text)
+
+    if re.search(r"\bAnnual\b", cover_text, re.I):
+        raise ValueError(f"导出的不是月报，而是年报: {cover_text}")
+
+    raise ValueError(f"无法从 Cover 识别月份: {cover_text}")
 
 
 def make_title(year: int, month_num: int) -> str:
     return f"{year}年{month_num}月流水"
 
-
-# =========================
-# 各公司类别顺序
-# =========================
 
 ABEMC_ORDER = [
     "总营收",
@@ -114,6 +106,7 @@ ABEMC_ORDER = [
     "市场投放",
     "人力与行政",
     "支付成本",
+    "未映射项目",
 ]
 
 FORRA_ORDER = [
@@ -125,6 +118,7 @@ FORRA_ORDER = [
     "市场投放",
     "AI订阅",
     "税费",
+    "未映射项目",
 ]
 
 MIND_ORDER = [
@@ -134,16 +128,13 @@ MIND_ORDER = [
     "技术与产品",
     "税费",
     "会计调整",
+    "未映射项目",
 ]
 
 
 def init_company_buckets(order: List[str]) -> Dict[str, List[Dict[str, Any]]]:
     return {k: [] for k in order}
 
-
-# =========================
-# Entries 解析
-# =========================
 
 def parse_entries_sheet(excel_path: str) -> pd.DataFrame:
     raw = read_raw_sheet(excel_path, "📝 Entries")
@@ -193,10 +184,6 @@ def parse_entries_sheet(excel_path: str) -> pd.DataFrame:
     return data
 
 
-# =========================
-# 通用映射 + 公司特例
-# =========================
-
 COMMON_EXPENSE_MAP = {
     "AWS Servers": ("技术与产品", "服务器费用（{m}月）"),
     "Tools / Platforms": ("人力与行政", "工具/软件（{m}月）"),
@@ -235,14 +222,11 @@ COMPANY_OVERRIDES = {
     "ABEMC": {
         "Affiliate Commissions": ("代理渠道成本", "所有代理分成/佣金"),
         "Technology Licensing": ("技术与产品", "技术授权费（30%总营收给MIND）"),
-
         "Security Reimbursement": ("人力与行政", "安全团队报销/补偿"),
         "Bonus - Bug's App": ("奖金与补贴", "Bug奖金（App Bug）"),
-
         "Bonus - Ranking": ("奖金与补贴", "{m}月排行榜奖励（以筹码形式发放）"),
         "Tournaments - Overlay": ("奖金与补贴", "比赛补贴/补贴池（Overlay）"),
         "Bonus - Remarketing": ("奖金与补贴", "再营销奖金"),
-
         "Gateway Fees (Paag)": ("支付成本", "Paag通道手续费"),
         "Gateway Fees (Trio)": ("支付成本", "Trio通道手续费"),
         "Gateway Fees (E2)": ("支付成本", "E2通道手续费"),
@@ -254,7 +238,6 @@ COMPANY_OVERRIDES = {
     },
     "MIND SPORTS": {
         "China Technology Team": ("人力与行政", "技术相关支出（向中国汇款）"),
-        # Account Adjustment 在下面按正负动态处理
     },
 }
 
@@ -278,6 +261,22 @@ def add_merged_row(
         merged[key] = {"income": 0.0, "expense": 0.0}
     merged[key]["income"] = round2(merged[key]["income"] + income)
     merged[key]["expense"] = round2(merged[key]["expense"] + expense)
+
+
+def add_unknown_item(
+    merged: Dict[Tuple[str, str], Dict[str, float]],
+    raw_name: str,
+    income: float = 0.0,
+    expense: float = 0.0,
+):
+    display_name = f"未映射 - {raw_name}"
+    add_merged_row(
+        merged,
+        "未映射项目",
+        display_name,
+        income=income,
+        expense=expense,
+    )
 
 
 def merged_to_buckets(
@@ -332,40 +331,47 @@ def build_company_buckets_from_entries(entries_df: pd.DataFrame, year: int, mont
         if amount is None:
             continue
 
-        # =========================
-        # 正数（收入 / 入账）
-        # =========================
         if amount > 0:
+            amt = round2(amount)
+
             if company == "ABEMC" and category == "Service Revenue":
-                abemc_service_revenue += round2(amount)
+                abemc_service_revenue += amt
 
             elif company == "FORRA" and category == "Service Revenue":
-                forra_service_revenue += round2(amount)
+                forra_service_revenue += amt
 
             elif company == "MIND SPORTS" and category == "Service Revenue":
-                mind_service_revenue += round2(amount)
+                mind_service_revenue += amt
 
             elif company == "ABEMC" and category in {"Security Withdrawal", "Office (Bills)"}:
-                abemc_other_income += round2(amount)
+                abemc_other_income += amt
 
             elif company == "FORRA" and category == "Refunds":
-                forra_other_income += round2(amount)
+                forra_other_income += amt
 
             elif company == "MIND SPORTS" and category == "Account Adjustment":
                 add_merged_row(
                     mind_merged,
                     "会计调整",
                     "会计调整(入账)",
-                    income=round2(amount),
+                    income=amt,
                     expense=0.0,
                 )
 
-            elif company == "MIND SPORTS":
-                mind_other_income += 0.0
+            else:
+                unknown[company].append({
+                    "raw_name": category,
+                    "amount": amt,
+                    "type": "income",
+                })
 
-        # =========================
-        # 负数（支出 / 出账）
-        # =========================
+                if company == "ABEMC":
+                    add_unknown_item(abemc_merged, category, income=amt)
+                elif company == "FORRA":
+                    add_unknown_item(forra_merged, category, income=amt)
+                elif company == "MIND SPORTS":
+                    add_unknown_item(mind_merged, category, income=amt)
+
         elif amount < 0:
             amount_abs = round2(abs(amount))
 
@@ -382,7 +388,15 @@ def build_company_buckets_from_entries(entries_df: pd.DataFrame, year: int, mont
             mapping = resolve_expense_mapping(company, category)
 
             if mapping is None:
-                unknown[company].append({"raw_name": category, "amount": amount_abs})
+                unknown[company].append({"raw_name": category, "amount": amount_abs, "type": "expense"})
+
+                if company == "ABEMC":
+                    add_unknown_item(abemc_merged, category, expense=amount_abs)
+                elif company == "FORRA":
+                    add_unknown_item(forra_merged, category, expense=amount_abs)
+                elif company == "MIND SPORTS":
+                    add_unknown_item(mind_merged, category, expense=amount_abs)
+
                 continue
 
             cat_name, display_tmpl = mapping
@@ -397,8 +411,6 @@ def build_company_buckets_from_entries(entries_df: pd.DataFrame, year: int, mont
                 add_merged_row(forra_merged, cat_name, display_name, expense=amount_abs)
             elif company == "MIND SPORTS":
                 add_merged_row(mind_merged, cat_name, display_name, expense=amount_abs)
-            else:
-                unknown[company].append({"raw_name": category, "amount": amount_abs})
 
     if abemc_service_revenue:
         abemc_buckets["总营收"].append({
@@ -454,10 +466,6 @@ def build_company_buckets_from_entries(entries_df: pd.DataFrame, year: int, mont
     return abemc_buckets, forra_buckets, mind_buckets, unknown
 
 
-# =========================
-# Distribution 解析
-# =========================
-
 def parse_distribution_sheet(excel_path: str) -> Dict[str, Any]:
     try:
         df = read_raw_sheet(excel_path, "💸 Distribution")
@@ -498,10 +506,6 @@ def parse_distribution_sheet(excel_path: str) -> Dict[str, Any]:
     return result
 
 
-# =========================
-# 展平给 write_to_sheet 用
-# =========================
-
 def flatten_company_rows(company_buckets: Dict[str, List[Dict[str, Any]]], order: List[str]) -> List[List[Any]]:
     rows: List[List[Any]] = []
 
@@ -520,10 +524,6 @@ def flatten_company_rows(company_buckets: Dict[str, List[Dict[str, Any]]], order
 
     return rows
 
-
-# =========================
-# 主解析函数
-# =========================
 
 def parse_finance_excel(excel_path: str) -> Dict[str, Any]:
     year, month_num = parse_period_from_cover(excel_path)
@@ -580,7 +580,10 @@ def parse_finance_excel(excel_path: str) -> Dict[str, Any]:
     other_income_total = round2(
         sum(item["income"] or 0 for item in abemc_buckets["其他收入"]) +
         sum(item["income"] or 0 for item in forra_buckets["其他收入"]) +
-        sum(item["income"] or 0 for item in mind_buckets["其他收入"])
+        sum(item["income"] or 0 for item in mind_buckets["其他收入"]) +
+        sum(item["income"] or 0 for item in abemc_buckets["未映射项目"]) +
+        sum(item["income"] or 0 for item in forra_buckets["未映射项目"]) +
+        sum(item["income"] or 0 for item in mind_buckets["未映射项目"])
     )
 
     total_balance = round2(abemc_net + forra_net + mind_net)

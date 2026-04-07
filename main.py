@@ -5,6 +5,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 from run_monthly import download_excel_for_month, run_pipeline
+from parse_finance_excel import parse_period_from_cover
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -43,11 +44,6 @@ def send_telegram_file(file_path: str, caption: str = "") -> None:
 
 
 def shift_month(dt: datetime.date, delta_months: int) -> datetime.date:
-    """
-    将日期移动若干个月，并返回该月的1号
-    例如：
-    2026-04-10 往前2个月 -> 2026-02-01
-    """
     y = dt.year
     m = dt.month + delta_months
 
@@ -65,14 +61,8 @@ def get_target_month() -> str:
     """
     账期规则：
     - 每月15日 ~ 下月14日：检查“上个月”的财报是否已进系统
-
-    等价计算：
     - 当天是15号及以后 -> 检查上个月
     - 当天是1~14号     -> 检查上上个月
-
-    示例：
-    - 2026-03-15 ~ 2026-04-14 -> 202602
-    - 2026-04-15 ~ 2026-05-14 -> 202603
     """
     test_month = os.environ.get("TEST_MONTH", "").strip()
     if test_month:
@@ -104,15 +94,6 @@ def sheet_exists(month: str) -> bool:
 
 
 def should_stop_retry() -> bool:
-    """
-    正式自动模式下：
-    每月15号开始检查“上个月”
-    如果到了本月15号之前，其实不需要跑
-    但你现在是每天定时跑一次，所以这里只做“是否已过14号”判断的可扩展预留。
-
-    当前版本先不硬性拦截，避免影响 TEST_MONTH 测试。
-    后面你如果要严格控制到“次月14号停止”，我可以再补。
-    """
     return False
 
 
@@ -131,18 +112,21 @@ def main():
     month = get_target_month()
 
     try:
+        print(
+            f"[INFO] today={datetime.date.today()}, "
+            f"target_month={month}, "
+            f"TEST_MONTH={os.environ.get('TEST_MONTH', '').strip()}"
+        )
         send_telegram(f"🚀 开始检查 {month} 流水")
 
         if should_stop_retry():
             send_telegram(f"⛔ 已超过重试截止日期，停止 {month} 抓取")
             return
 
-        # 1. 已存在则直接跳过
         if sheet_exists(month):
             send_telegram(f"✅ {month}流水已存在，今日跳过")
             return
 
-        # 2. 下载 Excel
         try:
             excel_path = download_excel_for_month(month)
         except RuntimeError as e:
@@ -155,13 +139,17 @@ def main():
             send_telegram(f"📭 网站还没有 {month} 的流水数据，明天继续检查")
             return
 
-        # 3. 发 Excel 到 Telegram
+        year, month_num = parse_period_from_cover(str(excel_path))
+        actual_month = f"{year}{month_num:02d}"
+        print(f"[INFO] Excel解析月份: {actual_month}")
+
+        if actual_month != month:
+            raise RuntimeError(f"下载文件月份不匹配：期望 {month}，实际 {actual_month}")
+
         send_telegram_file(str(excel_path), f"📥 已抓取 {month} Excel")
 
-        # 4. 生成 Google Sheet 流水
-        run_pipeline(month)
+        run_pipeline(month, excel_path)
 
-        # 5. 再检查一次是否成功生成
         if sheet_exists(month):
             send_telegram(f"🎉 {month} 流水生成成功")
         else:

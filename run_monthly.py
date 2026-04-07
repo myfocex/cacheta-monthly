@@ -36,7 +36,7 @@ def expected_excel_path(month: str) -> Path:
     return DOWNLOAD_DIR / f"{month}.xlsx"
 
 
-def download_excel_for_month(month: str) -> Path:
+def download_excel_for_month(month: str) -> Path | None:
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
     excel_path = expected_excel_path(month)
 
@@ -65,9 +65,7 @@ def download_excel_for_month(month: str) -> Path:
     storage_state_path = Path("storage_state.json")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-        )
+        browser = p.chromium.launch(headless=True)
 
         context_kwargs = {
             "accept_downloads": True,
@@ -105,29 +103,6 @@ def download_excel_for_month(month: str) -> Path:
                     page.wait_for_load_state("networkidle", timeout=30000)
 
             page.wait_for_timeout(1500)
-
-            export_btn = None
-            export_candidates = [
-                page.get_by_text("Export Excel", exact=False),
-                page.locator('button:has-text("Export Excel")'),
-                page.locator('[role="button"]:has-text("Export Excel")'),
-                page.locator('a:has-text("Export Excel")'),
-            ]
-
-            for loc in export_candidates:
-                try:
-                    for i in range(loc.count()):
-                        item = loc.nth(i)
-                        if item.is_visible():
-                            export_btn = item
-                            break
-                    if export_btn is not None:
-                        break
-                except Exception:
-                    continue
-
-            if export_btn is None:
-                raise RuntimeError("没找到 Export Excel 按钮")
 
             print(f"[INFO] 切换年份：{year}")
 
@@ -231,7 +206,34 @@ def download_excel_for_month(month: str) -> Path:
                 return None
 
             page.wait_for_load_state("networkidle", timeout=30000)
-            page.wait_for_timeout(1500)
+            page.wait_for_timeout(2000)
+
+            page_text = page.content()
+            if re.search(r"\bAnnual\b", page_text, re.I):
+                raise RuntimeError(f"当前仍是 Annual 视图，目标月份 {month} 未真正切换成功")
+
+            export_btn = None
+            export_candidates = [
+                page.get_by_text("Export Excel", exact=False),
+                page.locator('button:has-text("Export Excel")'),
+                page.locator('[role="button"]:has-text("Export Excel")'),
+                page.locator('a:has-text("Export Excel")'),
+            ]
+
+            for loc in export_candidates:
+                try:
+                    for i in range(loc.count()):
+                        item = loc.nth(i)
+                        if item.is_visible():
+                            export_btn = item
+                            break
+                    if export_btn is not None:
+                        break
+                except Exception:
+                    continue
+
+            if export_btn is None:
+                raise RuntimeError("没找到 Export Excel 按钮")
 
             print("[INFO] 点击 Export Excel")
             with page.expect_download(timeout=120000) as download_info:
@@ -254,12 +256,10 @@ def download_excel_for_month(month: str) -> Path:
             browser.close()
 
 
-def run_pipeline(month: str) -> Tuple[str, str, Path]:
+def run_pipeline(month: str, excel_path: Path) -> Tuple[str, str, Path]:
     month = validate_month(month)
 
     print(f"[INFO] 开始处理月份：{month}")
-
-    excel_path = download_excel_for_month(month)
     print(f"[INFO] Excel 文件：{excel_path}")
 
     if not excel_path.exists():
@@ -272,11 +272,14 @@ def run_pipeline(month: str) -> Tuple[str, str, Path]:
     validation = validate_finance_excel(str(excel_path))
 
     if validation["ok"]:
-        print("[INFO] 校验通过：总收入、总支出、净额、税费、顶部汇总均一致，且没有未映射类型。")
+        print("[INFO] 校验通过：总收入、总支出、净额、税费、顶部汇总均一致。")
     else:
         print("[WARNING] 校验未通过")
         for err in validation["errors"]:
             print(f"[WARNING] {err}")
+
+    for warning in validation["warnings"]:
+        print(f"[WARNING] {warning}")
 
     return sheet_name, url, excel_path
 
@@ -299,7 +302,11 @@ def main():
         print("=" * 60)
 
         try:
-            sheet_name, url, excel_path = run_pipeline(month)
+            excel_path = download_excel_for_month(month)
+            if not excel_path:
+                raise RuntimeError(f"{month} 暂无可下载月报")
+
+            sheet_name, url, excel_path = run_pipeline(month, excel_path)
             success_list.append({
                 "month": month,
                 "excel": str(excel_path),
