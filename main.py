@@ -42,19 +42,50 @@ def send_telegram_file(file_path: str, caption: str = "") -> None:
         )
 
 
-def get_last_month() -> str:
-    today = datetime.date.today()
-    first = today.replace(day=1)
-    last_month = first - datetime.timedelta(days=1)
-    return last_month.strftime("%Y%m")
+def shift_month(dt: datetime.date, delta_months: int) -> datetime.date:
+    """
+    将日期移动若干个月，并返回该月的1号
+    例如：
+    2026-04-10 往前2个月 -> 2026-02-01
+    """
+    y = dt.year
+    m = dt.month + delta_months
+
+    while m <= 0:
+        y -= 1
+        m += 12
+    while m > 12:
+        y += 1
+        m -= 12
+
+    return datetime.date(y, m, 1)
 
 
 def get_target_month() -> str:
-    # 手动测试优先，例如 TEST_MONTH=202601
+    """
+    账期规则：
+    - 每月15日 ~ 下月14日：检查“上个月”的财报是否已进系统
+
+    等价计算：
+    - 当天是15号及以后 -> 检查上个月
+    - 当天是1~14号     -> 检查上上个月
+
+    示例：
+    - 2026-03-15 ~ 2026-04-14 -> 202602
+    - 2026-04-15 ~ 2026-05-14 -> 202603
+    """
     test_month = os.environ.get("TEST_MONTH", "").strip()
     if test_month:
         return test_month
-    return get_last_month()
+
+    today = datetime.date.today()
+
+    if today.day >= 15:
+        target = shift_month(today, -1)
+    else:
+        target = shift_month(today, -2)
+
+    return target.strftime("%Y%m")
 
 
 def get_gspread_client():
